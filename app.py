@@ -17,6 +17,39 @@ def ratio(value: float | None) -> str:
     return "Undefined (P10 = 0)" if value is None else f"{value:,.2f}"
 
 
+def percentile_explanation(percentile: int, value: float, population: str = "U.S.") -> str:
+    return (
+        f"**P{percentile} = {money(value)}**\n\n"
+        f"This is the income at or below which approximately {percentile}% of adults in the weighted {population} sample fall. "
+        "The app sorts `income` from lowest to highest, carries each row's `acs_weight`, and returns the income of the first row whose cumulative ACS weight reaches the percentile target. "
+        "It is therefore a weighted result, not an ordinary unweighted pandas quantile."
+    )
+
+
+def measure_explanation(measure: str, results: dict, population: str = "the U.S.") -> str:
+    if measure.startswith("P") and measure[1:].isdigit():
+        percentile = int(measure[1:])
+        return percentile_explanation(percentile, results["percentiles"][percentile], population)
+    if measure == "Gini":
+        return (
+            f"**Weighted Gini = {results['gini']:.5f}**\n\n"
+            "This summarizes inequality using the weighted Lorenz curve. The calculation sorts `income`, retains negative observed incomes, "
+            "uses `acs_weight` to build cumulative population and income shares, integrates the curve, and computes `1 - 2 × Lorenz area`. "
+            "Higher values indicate more unequal income shares in this sample."
+        )
+    if measure == "Theil T":
+        return (
+            f"**Weighted Theil T = {results['theil']:.5f}**\n\n"
+            f"This index compares each adjusted income with the weighted mean income of {money(results['theil_mean'])}. "
+            "For Theil only, negative `income` values are recoded to zero; zero-income observations contribute zero. `acs_weight` determines each row's contribution."
+        )
+    return (
+        f"**P90/P10 = {ratio(results['p90_p10'])}**\n\n"
+        "This is the weighted P90 income divided by the weighted P10 income. It compares the upper-end cutoff with the lower-end cutoff. "
+        "It is shown as `Undefined (P10 = 0)` instead of dividing by zero when the lower cutoff is zero."
+    )
+
+
 @st.cache_data(show_spinner="Reading the Excel workbook…")
 def cached_load(path: str, modified: float):
     return load_dataset(path)
@@ -69,13 +102,16 @@ state_results = cached_analysis(state_data)
 st.subheader("Weighted U.S. distribution")
 us_cols = st.columns(6)
 for col, p in zip(us_cols, (10, 20, 40, 60, 80, 90)):
-    col.metric(f"P{p}", money(us["percentiles"][p]))
+    with col.popover(f"P{p}: {money(us['percentiles'][p])}", use_container_width=True):
+        st.markdown(percentile_explanation(p, us["percentiles"][p]))
 
 left, right = st.columns(2)
 with left:
-    st.metric("Weighted Gini", f"{us['gini']:.5f}")
+    with st.popover(f"Weighted Gini: {us['gini']:.5f}", use_container_width=True):
+        st.markdown(measure_explanation("Gini", us))
 with right:
-    st.metric("P90/P10", ratio(us["p90_p10"]))
+    with st.popover(f"P90/P10: {ratio(us['p90_p10'])}", use_container_width=True):
+        st.markdown(measure_explanation("P90/P10", us))
 
 curve = weighted_percentile_curve(data)
 fig = px.line(curve, x="percentile", y="income", markers=False, title="U.S. weighted income by percentile")
@@ -103,6 +139,12 @@ rows.extend([
     {"Measure": "P90/P10", "United States": ratio(us["p90_p10"]), selected_state: ratio(state_results["p90_p10"])},
 ])
 st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+
+measure = st.selectbox(
+    "Choose a comparison number to explain",
+    ["P10", "P20", "P40", "P60", "P80", "P90", "Gini", "Theil T", "P90/P10"],
+)
+st.info(measure_explanation(measure, state_results, selected_state))
 
 st.subheader("My guess vs. actual weighted U.S. percentile")
 guesses = {20: 10_000, 40: 30_000, 60: 45_000, 80: 70_000}
